@@ -1,0 +1,26 @@
+{
+  "instance_id": "django__django-16139",
+  "repo": "django/django",
+  "base_commit": "d559cb02da30f74debbb1fc3a46de0df134d2d80",
+  "scan_scope": "postapply_fullfile_delta_v1",
+  "scan_failed": false,
+  "scan_error": null,
+  "skipped": false,
+  "skip_reason": null,
+  "changed_files": [
+    "django/contrib/auth/forms.py"
+  ],
+  "files": [
+    {
+      "path": "django/contrib/auth/forms.py",
+      "before_violations": [
+        "NO_TRANSACTION_FOR_MULTI_WRITE"
+      ],
+      "after_violations": [
+        "NO_TRANSACTION_FOR_MULTI_WRITE"
+      ],
+      "new_violations": []
+    }
+  ],
+  "new_violations": []
+}

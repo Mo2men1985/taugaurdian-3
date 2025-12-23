@@ -1,0 +1,33 @@
+{
+  "instance_id": "django__django-11620",
+  "repo": "django/django",
+  "base_commit": "514efa3129792ec2abb2444f3e7aeb3f21a38386",
+  "scan_scope": "postapply_fullfile_delta_v1",
+  "scan_failed": false,
+  "scan_error": null,
+  "skipped": false,
+  "skip_reason": null,
+  "changed_files": [
+    "django/urls/resolvers.py",
+    "tests/urlpatterns/tests.py"
+  ],
+  "files": [
+    {
+      "path": "django/urls/resolvers.py",
+      "before_violations": [
+        "NO_TRANSACTION_FOR_MULTI_WRITE"
+      ],
+      "after_violations": [
+        "NO_TRANSACTION_FOR_MULTI_WRITE"
+      ],
+      "new_violations": []
+    },
+    {
+      "path": "tests/urlpatterns/tests.py",
+      "before_violations": [],
+      "after_violations": [],
+      "new_violations": []
+    }
+  ],
+  "new_violations": []
+}

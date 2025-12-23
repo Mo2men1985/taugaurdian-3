@@ -1,0 +1,6 @@
+[CI] τGuardian decisions from msa_glm46_lite_run20/msa_glm46_lite_run20_governed_v2_agentic.jsonl:
+  Total   : 18
+  OK      : 6
+  ABSTAIN : 12
+  VETO    : 0
+[CI] PASS: no VETO decisions. Build is green.

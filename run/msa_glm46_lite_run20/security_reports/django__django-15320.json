@@ -1,0 +1,22 @@
+{
+  "instance_id": "django__django-15320",
+  "repo": "django/django",
+  "base_commit": "b55ebe32417e0884b6b8b3e1bc0379033aa221af",
+  "scan_scope": "postapply_fullfile_delta_v1",
+  "scan_failed": false,
+  "scan_error": null,
+  "skipped": false,
+  "skip_reason": null,
+  "changed_files": [
+    "django/db/models/expressions.py"
+  ],
+  "files": [
+    {
+      "path": "django/db/models/expressions.py",
+      "before_violations": [],
+      "after_violations": [],
+      "new_violations": []
+    }
+  ],
+  "new_violations": []
+}

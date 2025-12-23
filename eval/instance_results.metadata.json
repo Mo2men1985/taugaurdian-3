@@ -1,0 +1,5 @@
+{
+  "cli_command": "python tg_swebench_cli.py --predictions-path /home/mo2men1985/projects/tau_guardian_harness9/msa_glm46_lite_run20/preds_filled.json --run-id msa_glm46_lite_run20 --outdir /home/mo2men1985/projects/tau_guardian_harness9/msa_glm46_lite_run20/eval",
+  "predictions_path": "/home/mo2men1985/projects/tau_guardian_harness9/msa_glm46_lite_run20/preds_filled.json",
+  "predictions_sha256": "af33835bdff69c874342ff28b1a9821b284192eb5141fd8a93b93067cef81d12"
+}

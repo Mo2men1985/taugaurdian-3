@@ -1,0 +1,22 @@
+{
+  "instance_id": "django__django-11848",
+  "repo": "django/django",
+  "base_commit": "f0adf3b9b7a19cdee05368ff0c0c2d087f011180",
+  "scan_scope": "postapply_fullfile_delta_v1",
+  "scan_failed": false,
+  "scan_error": null,
+  "skipped": false,
+  "skip_reason": null,
+  "changed_files": [
+    "django/utils/http.py"
+  ],
+  "files": [
+    {
+      "path": "django/utils/http.py",
+      "before_violations": [],
+      "after_violations": [],
+      "new_violations": []
+    }
+  ],
+  "new_violations": []
+}

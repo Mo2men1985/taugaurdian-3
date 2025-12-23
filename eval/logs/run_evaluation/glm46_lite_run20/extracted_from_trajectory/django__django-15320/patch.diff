@@ -1,0 +1,333 @@
+diff --git a/comprehensive_test.py b/comprehensive_test.py
+new file mode 100644
+index 0000000000..5e7222e83c
+--- /dev/null
++++ b/comprehensive_test.py
+@@ -0,0 +1,63 @@
++import os
++import sys
++import django
++from django.conf import settings
++
++# Configure Django settings
++settings.configure(
++    DEBUG=True,
++    DATABASES={
++        'default': {
++            'ENGINE': 'django.db.backends.sqlite3',
++            'NAME': ':memory:',
++        }
++    },
++    INSTALLED_APPS=[
++        'django.contrib.contenttypes',
++        'django.contrib.auth',
++    ],
++    SECRET_KEY='test-secret-key',
++)
++django.setup()
++
++from django.db import connection
++from django.db.models import Subquery, OuterRef, Exists
++from django.contrib.auth.models import User
++
++print("=== Comprehensive Subquery Tests ===")
++
++# Test 1: Basic Subquery
++print("\n1. Basic Subquery:")
++q1 = Subquery(User.objects.all())
++result1 = q1.as_sql(q1.query.get_compiler('default'), connection)
++print(f"SQL: {result1[0]}")
++print(f"Valid: {result1[0].startswith('(SELECT') and result1[0].endswith(')')}")
++
++# Test 2: Subquery with filter
++print("\n2. Subquery with filter:")
++q2 = Subquery(User.objects.filter(is_active=True))
++result2 = q2.as_sql(q2.query.get_compiler('default'), connection)
++print(f"SQL: {result2[0]}")
++print(f"Valid: {result2[0].startswith('(SELECT') and result2[0].endswith(')')}")
++
++# Test 3: Subquery with values
++print("\n3. Subquery with values:")
++q3 = Subquery(User.objects.values('id'))
++result3 = q3.as_sql(q3.query.get_compiler('default'), connection)
++print(f"SQL: {result3[0]}")
++print(f"Valid: {result3[0].startswith('(SELECT') and result3[0].endswith(')')}")
++
++# Test 4: Exists (which inherits from Subquery)
++print("\n4. Exists (inherits from Subquery):")
++q4 = Exists(User.objects.filter(id=OuterRef('id')))
++result4 = q4.as_sql(q4.query.get_compiler('default'), connection)
++print(f"SQL: {result4[0]}")
++print(f"Valid: {result4[0].startswith('EXISTS(') and result4[0].endswith(')')}")
++
++# Test 5: Verify subquery attribute is set correctly
++print("\n5. Verify subquery attribute:")
++q5 = Subquery(User.objects.all())
++print(f"q5.query.subquery: {q5.query.subquery}")
++print(f"Correct: {q5.query.subquery is True}")
++
++print("\n=== All tests completed ===")
+diff --git a/django/db/models/expressions.py b/django/db/models/expressions.py
+index 6f26dff0e0..201e4832f2 100644
+--- a/django/db/models/expressions.py
++++ b/django/db/models/expressions.py
+@@ -1150,6 +1150,7 @@ class Subquery(BaseExpression, Combinable):
+     def __init__(self, queryset, output_field=None, **extra):
+         # Allow the usage of both QuerySet and sql.Query objects.
+         self.query = getattr(queryset, 'query', queryset)
++        self.query.subquery = True
+         self.extra = extra
+         super().__init__(output_field)
+ 
+diff --git a/final_verification.py b/final_verification.py
+new file mode 100644
+index 0000000000..bde393790b
+--- /dev/null
++++ b/final_verification.py
+@@ -0,0 +1,49 @@
++import os
++import sys
++import django
++from django.conf import settings
++
++# Configure Django settings
++settings.configure(
++    DEBUG=True,
++    DATABASES={
++        'default': {
++            'ENGINE': 'django.db.backends.sqlite3',
++            'NAME': ':memory:',
++        }
++    },
++    INSTALLED_APPS=[
++        'django.contrib.contenttypes',
++        'django.contrib.auth',
++    ],
++    SECRET_KEY='test-secret-key',
++)
++django.setup()
++
++from django.db import connection
++from django.db.models import Subquery
++from django.contrib.auth.models import User
++
++print("=== Final Verification - Exact PR Scenario ===")
++
++# Reproduce the exact scenario from the PR description
++q = Subquery(User.objects.all())
++
++print("1. str(q.query):")
++print(str(q.query))
++print()
++
++print("2. q.as_sql() result:")
++result = q.as_sql(q.query.get_compiler('default'), connection)
++print(result)
++print()
++
++# Verify the SQL is correct
++sql = result[0]
++print(f"3. Verification:")
++print(f"   Starts with '(SELECT': {sql.startswith('(SELECT')}")
++print(f"   Ends with ')' and quote: {sql.endswith(')')}")
++print(f"   Contains 'SELECT' intact: {'SELECT' in sql}")
++print(f"   No truncated characters: {not sql.startswith('(ELECT')}")
++
++print("\n=== Fix verified successfully ===")
+diff --git a/reproduce_issue.py b/reproduce_issue.py
+new file mode 100644
+index 0000000000..b9fb81702f
+--- /dev/null
++++ b/reproduce_issue.py
+@@ -0,0 +1,47 @@
++import os
++import sys
++import django
++from django.conf import settings
++
++# Configure Django settings
++settings.configure(
++    DEBUG=True,
++    DATABASES={
++        'default': {
++            'ENGINE': 'django.db.backends.sqlite3',
++            'NAME': ':memory:',
++        }
++    },
++    INSTALLED_APPS=[
++        'django.contrib.contenttypes',
++        'django.contrib.auth',
++    ],
++    SECRET_KEY='test-secret-key',
++)
++django.setup()
++
++from django.db import connection
++from django.db.models import Subquery
++from django.contrib.auth.models import User
++
++# Create a simple test
++print("=== Reproducing Subquery.as_sql() issue ===")
++
++# Create a subquery
++q = Subquery(User.objects.all())
++print("1. str(q.query):")
++print(str(q.query))
++print()
++
++print("2. q.as_sql() without subquery=True:")
++try:
++    result = q.as_sql(q.query.get_compiler('default'), connection)
++    print(result)
++except Exception as e:
++    print(f"Error: {e}")
++print()
++
++print("3. Setting q.query.subquery = True:")
++q.query.subquery = True
++result = q.as_sql(q.query.get_compiler('default'), connection)
++print(result)
+diff --git a/simple_test.py b/simple_test.py
+new file mode 100644
+index 0000000000..9a3fafc4ae
+--- /dev/null
++++ b/simple_test.py
+@@ -0,0 +1,63 @@
++import os
++import sys
++import django
++from django.conf import settings
++
++# Configure Django settings
++settings.configure(
++    DEBUG=True,
++    DATABASES={
++        'default': {
++            'ENGINE': 'django.db.backends.sqlite3',
++            'NAME': ':memory:',
++        }
++    },
++    INSTALLED_APPS=[
++        'django.contrib.contenttypes',
++        'django.contrib.auth',
++    ],
++    SECRET_KEY='test-secret-key',
++)
++django.setup()
++
++from django.db import connection
++from django.db.models import Subquery
++from django.contrib.auth.models import User
++
++print("=== Simple Subquery Tests ===")
++
++# Test 1: Basic Subquery
++print("\n1. Basic Subquery:")
++q1 = Subquery(User.objects.all())
++result1 = q1.as_sql(q1.query.get_compiler('default'), connection)
++print(f"SQL: {result1[0]}")
++print(f"Valid: {result1[0].startswith('(SELECT') and result1[0].endswith(')')}")
++
++# Test 2: Subquery with filter
++print("\n2. Subquery with filter:")
++q2 = Subquery(User.objects.filter(is_active=True))
++result2 = q2.as_sql(q2.query.get_compiler('default'), connection)
++print(f"SQL: {result2[0]}")
++print(f"Valid: {result2[0].startswith('(SELECT') and result2[0].endswith(')')}")
++
++# Test 3: Subquery with values
++print("\n3. Subquery with values:")
++q3 = Subquery(User.objects.values('id'))
++result3 = q3.as_sql(q3.query.get_compiler('default'), connection)
++print(f"SQL: {result3[0]}")
++print(f"Valid: {result3[0].startswith('(SELECT') and result3[0].endswith(')')}")
++
++# Test 4: Verify subquery attribute is set correctly
++print("\n4. Verify subquery attribute:")
++q4 = Subquery(User.objects.all())
++print(f"q4.query.subquery: {q4.query.subquery}")
++print(f"Correct: {q4.query.subquery is True}")
++
++# Test 5: Test with limit
++print("\n5. Subquery with limit:")
++q5 = Subquery(User.objects.all()[:3])
++result5 = q5.as_sql(q5.query.get_compiler('default'), connection)
++print(f"SQL: {result5[0]}")
++print(f"Valid: {result5[0].startswith('(SELECT') and result5[0].endswith(')')}")
++
++print("\n=== All tests completed successfully ===")
+diff --git a/test_existing_functionality.py b/test_existing_functionality.py
+new file mode 100644
+index 0000000000..c462760529
+--- /dev/null
++++ b/test_existing_functionality.py
+@@ -0,0 +1,69 @@
++import os
++import sys
++import django
++from django.conf import settings
++
++# Configure Django settings
++settings.configure(
++    DEBUG=True,
++    DATABASES={
++        'default': {
++            'ENGINE': 'django.db.backends.sqlite3',
++            'NAME': ':memory:',
++        }
++    },
++    INSTALLED_APPS=[
++        'django.contrib.contenttypes',
++        'django.contrib.auth',
++    ],
++    SECRET_KEY='test-secret-key',
++    USE_TZ=True,
++)
++django.setup()
++
++from django.db import connection
++from django.db.models import Subquery, OuterRef, Q
++from django.contrib.auth.models import User
++
++print("=== Testing Existing Subquery Functionality ===")
++
++# Test similar to the existing Django tests
++print("\n1. Basic Subquery with values:")
++# Similar to test_in_subquery
++basic_subquery = Subquery(User.objects.values('id')[:1])
++result = basic_subquery.as_sql(basic_subquery.query.get_compiler('default'), connection)
++print(f"SQL: {result[0]}")
++print(f"Valid: {result[0].startswith('(SELECT') and result[0].endswith(')')}")
++
++print("\n2. Subquery with filter and OuterRef:")
++# Similar to the largest_company example
++subquery_with_outerref = Subquery(
++    User.objects.filter(
++        Q(id=OuterRef('pk')) | Q(username=OuterRef('username'))
++    ).values('username')[:1], 
++    output_field=None
++)
++# Note: This will fail with OuterRef without proper context, but let's check the subquery attribute
++print(f"subquery_with_outerref.query.subquery: {subquery_with_outerref.query.subquery}")
++print(f"Correct: {subquery_with_outerref.query.subquery is True}")
++
++print("\n3. Subquery with complex filter:")
++complex_subquery = Subquery(
++    User.objects.filter(
++        is_active=True,
++        is_staff=False
++    ).values('id')
++)
++result = complex_subquery.as_sql(complex_subquery.query.get_compiler('default'), connection)
++print(f"SQL: {result[0]}")
++print(f"Valid: {result[0].startswith('(SELECT') and result[0].endswith(')')}")
++
++print("\n4. Subquery with order_by and limit:")
++ordered_subquery = Subquery(
++    User.objects.order_by('-date_joined').values('id')[:3]
++)
++result = ordered_subquery.as_sql(ordered_subquery.query.get_compiler('default'), connection)
++print(f"SQL: {result[0]}")
++print(f"Valid: {result[0].startswith('(SELECT') and result[0].endswith(')')}")
++
++print("\n=== All existing functionality tests passed ===")

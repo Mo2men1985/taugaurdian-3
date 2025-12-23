@@ -1,0 +1,13 @@
+{
+  "instance_id": "sympy__sympy-11897",
+  "repo": "sympy/sympy",
+  "base_commit": "e2918c1205c47345eb73c9be68b14c0f15fdeb17",
+  "scan_scope": "postapply_fullfile_delta_v1",
+  "scan_failed": false,
+  "scan_error": null,
+  "skipped": true,
+  "skip_reason": "EMPTY_PATCH",
+  "changed_files": [],
+  "files": [],
+  "new_violations": []
+}

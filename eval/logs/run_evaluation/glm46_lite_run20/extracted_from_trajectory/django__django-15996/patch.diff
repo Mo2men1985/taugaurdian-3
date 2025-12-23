@@ -1,0 +1,748 @@
+diff --git a/django/db/migrations/serializer.py b/django/db/migrations/serializer.py
+index 38da1e6ecc..650ad45630 100644
+--- a/django/db/migrations/serializer.py
++++ b/django/db/migrations/serializer.py
+@@ -125,10 +125,30 @@ class EnumSerializer(BaseSerializer):
+     def serialize(self):
+         enum_class = self.value.__class__
+         module = enum_class.__module__
+-        return (
+-            "%s.%s[%r]" % (module, enum_class.__qualname__, self.value.name),
+-            {"import %s" % module},
+-        )
++        
++        # Check if this is a single enum value with a name
++        if hasattr(self.value, "name") and self.value.name is not None:
++            return (
++                "%s.%s[%r]" % (module, enum_class.__qualname__, self.value.name),
++                {"import %s" % module},
++            )
++        else:
++            # Handle combined enum flags by decomposing them
++            component_names = []
++            for flag in enum_class:
++                if flag in self.value and hasattr(flag, "name") and flag.name is not None:
++                    component_names.append("%s.%s" % (module, flag.name))
++            
++            if component_names:
++                # Create expression by ORing the components together
++                expression = " | ".join(component_names)
++                return expression, {"import %s" % module}
++            else:
++                # Fallback to original behavior if no components found
++                return (
++                    "%s.%s[%r]" % (module, enum_class.__qualname__, None),
++                    {"import %s" % module},
++                )
+ 
+ 
+ class FloatSerializer(BaseSimpleSerializer):
+diff --git a/django/db/migrations/serializer.py.backup b/django/db/migrations/serializer.py.backup
+new file mode 100644
+index 0000000000..38da1e6ecc
+--- /dev/null
++++ b/django/db/migrations/serializer.py.backup
+@@ -0,0 +1,382 @@
++import builtins
++import collections.abc
++import datetime
++import decimal
++import enum
++import functools
++import math
++import os
++import pathlib
++import re
++import types
++import uuid
++
++from django.conf import SettingsReference
++from django.db import models
++from django.db.migrations.operations.base import Operation
++from django.db.migrations.utils import COMPILED_REGEX_TYPE, RegexObject
++from django.utils.functional import LazyObject, Promise
++from django.utils.version import get_docs_version
++
++
++class BaseSerializer:
++    def __init__(self, value):
++        self.value = value
++
++    def serialize(self):
++        raise NotImplementedError(
++            "Subclasses of BaseSerializer must implement the serialize() method."
++        )
++
++
++class BaseSequenceSerializer(BaseSerializer):
++    def _format(self):
++        raise NotImplementedError(
++            "Subclasses of BaseSequenceSerializer must implement the _format() method."
++        )
++
++    def serialize(self):
++        imports = set()
++        strings = []
++        for item in self.value:
++            item_string, item_imports = serializer_factory(item).serialize()
++            imports.update(item_imports)
++            strings.append(item_string)
++        value = self._format()
++        return value % (", ".join(strings)), imports
++
++
++class BaseSimpleSerializer(BaseSerializer):
++    def serialize(self):
++        return repr(self.value), set()
++
++
++class ChoicesSerializer(BaseSerializer):
++    def serialize(self):
++        return serializer_factory(self.value.value).serialize()
++
++
++class DateTimeSerializer(BaseSerializer):
++    """For datetime.*, except datetime.datetime."""
++
++    def serialize(self):
++        return repr(self.value), {"import datetime"}
++
++
++class DatetimeDatetimeSerializer(BaseSerializer):
++    """For datetime.datetime."""
++
++    def serialize(self):
++        if self.value.tzinfo is not None and self.value.tzinfo != datetime.timezone.utc:
++            self.value = self.value.astimezone(datetime.timezone.utc)
++        imports = ["import datetime"]
++        return repr(self.value), set(imports)
++
++
++class DecimalSerializer(BaseSerializer):
++    def serialize(self):
++        return repr(self.value), {"from decimal import Decimal"}
++
++
++class DeconstructableSerializer(BaseSerializer):
++    @staticmethod
++    def serialize_deconstructed(path, args, kwargs):
++        name, imports = DeconstructableSerializer._serialize_path(path)
++        strings = []
++        for arg in args:
++            arg_string, arg_imports = serializer_factory(arg).serialize()
++            strings.append(arg_string)
++            imports.update(arg_imports)
++        for kw, arg in sorted(kwargs.items()):
++            arg_string, arg_imports = serializer_factory(arg).serialize()
++            imports.update(arg_imports)
++            strings.append("%s=%s" % (kw, arg_string))
++        return "%s(%s)" % (name, ", ".join(strings)), imports
++
++    @staticmethod
++    def _serialize_path(path):
++        module, name = path.rsplit(".", 1)
++        if module == "django.db.models":
++            imports = {"from django.db import models"}
++            name = "models.%s" % name
++        else:
++            imports = {"import %s" % module}
++            name = path
++        return name, imports
++
++    def serialize(self):
++        return self.serialize_deconstructed(*self.value.deconstruct())
++
++
++class DictionarySerializer(BaseSerializer):
++    def serialize(self):
++        imports = set()
++        strings = []
++        for k, v in sorted(self.value.items()):
++            k_string, k_imports = serializer_factory(k).serialize()
++            v_string, v_imports = serializer_factory(v).serialize()
++            imports.update(k_imports)
++            imports.update(v_imports)
++            strings.append((k_string, v_string))
++        return "{%s}" % (", ".join("%s: %s" % (k, v) for k, v in strings)), imports
++
++
++class EnumSerializer(BaseSerializer):
++    def serialize(self):
++        enum_class = self.value.__class__
++        module = enum_class.__module__
++        return (
++            "%s.%s[%r]" % (module, enum_class.__qualname__, self.value.name),
++            {"import %s" % module},
++        )
++
++
++class FloatSerializer(BaseSimpleSerializer):
++    def serialize(self):
++        if math.isnan(self.value) or math.isinf(self.value):
++            return 'float("{}")'.format(self.value), set()
++        return super().serialize()
++
++
++class FrozensetSerializer(BaseSequenceSerializer):
++    def _format(self):
++        return "frozenset([%s])"
++
++
++class FunctionTypeSerializer(BaseSerializer):
++    def serialize(self):
++        if getattr(self.value, "__self__", None) and isinstance(
++            self.value.__self__, type
++        ):
++            klass = self.value.__self__
++            module = klass.__module__
++            return "%s.%s.%s" % (module, klass.__name__, self.value.__name__), {
++                "import %s" % module
++            }
++        # Further error checking
++        if self.value.__name__ == "<lambda>":
++            raise ValueError("Cannot serialize function: lambda")
++        if self.value.__module__ is None:
++            raise ValueError("Cannot serialize function %r: No module" % self.value)
++
++        module_name = self.value.__module__
++
++        if "<" not in self.value.__qualname__:  # Qualname can include <locals>
++            return "%s.%s" % (module_name, self.value.__qualname__), {
++                "import %s" % self.value.__module__
++            }
++
++        raise ValueError(
++            "Could not find function %s in %s.\n" % (self.value.__name__, module_name)
++        )
++
++
++class FunctoolsPartialSerializer(BaseSerializer):
++    def serialize(self):
++        # Serialize functools.partial() arguments
++        func_string, func_imports = serializer_factory(self.value.func).serialize()
++        args_string, args_imports = serializer_factory(self.value.args).serialize()
++        keywords_string, keywords_imports = serializer_factory(
++            self.value.keywords
++        ).serialize()
++        # Add any imports needed by arguments
++        imports = {"import functools", *func_imports, *args_imports, *keywords_imports}
++        return (
++            "functools.%s(%s, *%s, **%s)"
++            % (
++                self.value.__class__.__name__,
++                func_string,
++                args_string,
++                keywords_string,
++            ),
++            imports,
++        )
++
++
++class IterableSerializer(BaseSerializer):
++    def serialize(self):
++        imports = set()
++        strings = []
++        for item in self.value:
++            item_string, item_imports = serializer_factory(item).serialize()
++            imports.update(item_imports)
++            strings.append(item_string)
++        # When len(strings)==0, the empty iterable should be serialized as
++        # "()", not "(,)" because (,) is invalid Python syntax.
++        value = "(%s)" if len(strings) != 1 else "(%s,)"
++        return value % (", ".join(strings)), imports
++
++
++class ModelFieldSerializer(DeconstructableSerializer):
++    def serialize(self):
++        attr_name, path, args, kwargs = self.value.deconstruct()
++        return self.serialize_deconstructed(path, args, kwargs)
++
++
++class ModelManagerSerializer(DeconstructableSerializer):
++    def serialize(self):
++        as_manager, manager_path, qs_path, args, kwargs = self.value.deconstruct()
++        if as_manager:
++            name, imports = self._serialize_path(qs_path)
++            return "%s.as_manager()" % name, imports
++        else:
++            return self.serialize_deconstructed(manager_path, args, kwargs)
++
++
++class OperationSerializer(BaseSerializer):
++    def serialize(self):
++        from django.db.migrations.writer import OperationWriter
++
++        string, imports = OperationWriter(self.value, indentation=0).serialize()
++        # Nested operation, trailing comma is handled in upper OperationWriter._write()
++        return string.rstrip(","), imports
++
++
++class PathLikeSerializer(BaseSerializer):
++    def serialize(self):
++        return repr(os.fspath(self.value)), {}
++
++
++class PathSerializer(BaseSerializer):
++    def serialize(self):
++        # Convert concrete paths to pure paths to avoid issues with migrations
++        # generated on one platform being used on a different platform.
++        prefix = "Pure" if isinstance(self.value, pathlib.Path) else ""
++        return "pathlib.%s%r" % (prefix, self.value), {"import pathlib"}
++
++
++class RegexSerializer(BaseSerializer):
++    def serialize(self):
++        regex_pattern, pattern_imports = serializer_factory(
++            self.value.pattern
++        ).serialize()
++        # Turn off default implicit flags (e.g. re.U) because regexes with the
++        # same implicit and explicit flags aren't equal.
++        flags = self.value.flags ^ re.compile("").flags
++        regex_flags, flag_imports = serializer_factory(flags).serialize()
++        imports = {"import re", *pattern_imports, *flag_imports}
++        args = [regex_pattern]
++        if flags:
++            args.append(regex_flags)
++        return "re.compile(%s)" % ", ".join(args), imports
++
++
++class SequenceSerializer(BaseSequenceSerializer):
++    def _format(self):
++        return "[%s]"
++
++
++class SetSerializer(BaseSequenceSerializer):
++    def _format(self):
++        # Serialize as a set literal except when value is empty because {}
++        # is an empty dict.
++        return "{%s}" if self.value else "set(%s)"
++
++
++class SettingsReferenceSerializer(BaseSerializer):
++    def serialize(self):
++        return "settings.%s" % self.value.setting_name, {
++            "from django.conf import settings"
++        }
++
++
++class TupleSerializer(BaseSequenceSerializer):
++    def _format(self):
++        # When len(value)==0, the empty tuple should be serialized as "()",
++        # not "(,)" because (,) is invalid Python syntax.
++        return "(%s)" if len(self.value) != 1 else "(%s,)"
++
++
++class TypeSerializer(BaseSerializer):
++    def serialize(self):
++        special_cases = [
++            (models.Model, "models.Model", ["from django.db import models"]),
++            (type(None), "type(None)", []),
++        ]
++        for case, string, imports in special_cases:
++            if case is self.value:
++                return string, set(imports)
++        if hasattr(self.value, "__module__"):
++            module = self.value.__module__
++            if module == builtins.__name__:
++                return self.value.__name__, set()
++            else:
++                return "%s.%s" % (module, self.value.__qualname__), {
++                    "import %s" % module
++                }
++
++
++class UUIDSerializer(BaseSerializer):
++    def serialize(self):
++        return "uuid.%s" % repr(self.value), {"import uuid"}
++
++
++class Serializer:
++    _registry = {
++        # Some of these are order-dependent.
++        frozenset: FrozensetSerializer,
++        list: SequenceSerializer,
++        set: SetSerializer,
++        tuple: TupleSerializer,
++        dict: DictionarySerializer,
++        models.Choices: ChoicesSerializer,
++        enum.Enum: EnumSerializer,
++        datetime.datetime: DatetimeDatetimeSerializer,
++        (datetime.date, datetime.timedelta, datetime.time): DateTimeSerializer,
++        SettingsReference: SettingsReferenceSerializer,
++        float: FloatSerializer,
++        (bool, int, type(None), bytes, str, range): BaseSimpleSerializer,
++        decimal.Decimal: DecimalSerializer,
++        (functools.partial, functools.partialmethod): FunctoolsPartialSerializer,
++        (
++            types.FunctionType,
++            types.BuiltinFunctionType,
++            types.MethodType,
++        ): FunctionTypeSerializer,
++        collections.abc.Iterable: IterableSerializer,
++        (COMPILED_REGEX_TYPE, RegexObject): RegexSerializer,
++        uuid.UUID: UUIDSerializer,
++        pathlib.PurePath: PathSerializer,
++        os.PathLike: PathLikeSerializer,
++    }
++
++    @classmethod
++    def register(cls, type_, serializer):
++        if not issubclass(serializer, BaseSerializer):
++            raise ValueError(
++                "'%s' must inherit from 'BaseSerializer'." % serializer.__name__
++            )
++        cls._registry[type_] = serializer
++
++    @classmethod
++    def unregister(cls, type_):
++        cls._registry.pop(type_)
++
++
++def serializer_factory(value):
++    if isinstance(value, Promise):
++        value = str(value)
++    elif isinstance(value, LazyObject):
++        # The unwrapped value is returned as the first item of the arguments
++        # tuple.
++        value = value.__reduce__()[1][0]
++
++    if isinstance(value, models.Field):
++        return ModelFieldSerializer(value)
++    if isinstance(value, models.manager.BaseManager):
++        return ModelManagerSerializer(value)
++    if isinstance(value, Operation):
++        return OperationSerializer(value)
++    if isinstance(value, type):
++        return TypeSerializer(value)
++    # Anything that knows how to deconstruct itself.
++    if hasattr(value, "deconstruct"):
++        return DeconstructableSerializer(value)
++    for type_, serializer_cls in Serializer._registry.items():
++        if isinstance(value, type_):
++            return serializer_cls(value)
++    raise ValueError(
++        "Cannot serialize: %r\nThere are some values Django cannot serialize into "
++        "migration files.\nFor more, see https://docs.djangoproject.com/en/%s/"
++        "topics/migrations/#migration-serializing" % (value, get_docs_version())
++    )
+diff --git a/test_django_model.py b/test_django_model.py
+new file mode 100644
+index 0000000000..74fe268510
+--- /dev/null
++++ b/test_django_model.py
+@@ -0,0 +1,36 @@
++import re
++from django.db import models
++from django.db.migrations.serializer import serializer_factory
++
++# Test the specific scenario from the PR description
++regex_flags = models.IntegerField(default=re.UNICODE | re.IGNORECASE)
++print("Model field created successfully!")
++print(f"Field default: {regex_flags.default}")
++print(f"Field default type: {type(regex_flags.default)}")
++
++# Test serialization of the default value
++try:
++    serializer = serializer_factory(regex_flags.default)
++    result, imports = serializer.serialize()
++    print(f"Serialization result: {result}")
++    print(f"Imports: {imports}")
++except Exception as e:
++    print(f"Error during serialization: {e}")
++
++# Test deconstruction (used in migrations)
++try:
++    name, path, args, kwargs = regex_flags.deconstruct()
++    print(f"\nDeconstruction result:")
++    print(f"  name: {name}")
++    print(f"  path: {path}")
++    print(f"  args: {args}")
++    print(f"  kwargs: {kwargs}")
++    
++    # Test serialization of the kwargs
++    if 'default' in kwargs:
++        default_serializer = serializer_factory(kwargs['default'])
++        default_result, default_imports = default_serializer.serialize()
++        print(f"  Serialized default: {default_result}")
++        print(f"  Default imports: {default_imports}")
++except Exception as e:
++    print(f"Error during deconstruction: {e}")
+diff --git a/test_edge_cases.py b/test_edge_cases.py
+new file mode 100644
+index 0000000000..e7c58e289b
+--- /dev/null
++++ b/test_edge_cases.py
+@@ -0,0 +1,46 @@
++import enum
++from django.db.migrations.serializer import serializer_factory
++
++# Test regular enum (non-flag)
++class Color(enum.Enum):
++    RED = 1
++    GREEN = 2
++    BLUE = 3
++
++# Test enum with None values
++class Status(enum.Enum):
++    PENDING = "pending"
++    APPROVED = "approved"
++    REJECTED = None
++
++def test_serialization(value, description):
++    print(f"\n=== {description} ===")
++    print(f"Value: {value}")
++    print(f"Type: {type(value)}")
++    
++    try:
++        serializer = serializer_factory(value)
++        result, imports = serializer.serialize()
++        print(f"Serialization result: {result}")
++        print(f"Imports: {imports}")
++        return True
++    except Exception as e:
++        print(f"Error: {e}")
++        return False
++
++# Test cases
++test_cases = [
++    (Color.RED, "Regular enum (RED)"),
++    (Color.GREEN, "Regular enum (GREEN)"),
++    (Status.PENDING, "Enum with string value (PENDING)"),
++    (Status.APPROVED, "Enum with string value (APPROVED)"),
++    (Status.REJECTED, "Enum with None value (REJECTED)"),
++]
++
++all_passed = True
++for value, desc in test_cases:
++    passed = test_serialization(value, desc)
++    all_passed = all_passed and passed
++
++print(f"\n=== Summary ===")
++print(f"All tests passed: {all_passed}")
+diff --git a/test_enum_comprehensive.py b/test_enum_comprehensive.py
+new file mode 100644
+index 0000000000..34d05655b6
+--- /dev/null
++++ b/test_enum_comprehensive.py
+@@ -0,0 +1,34 @@
++import re
++from django.db.migrations.serializer import serializer_factory
++
++def test_serialization(value, description):
++    print(f"\n=== {description} ===")
++    print(f"Value: {value}")
++    print(f"Type: {type(value)}")
++    
++    try:
++        serializer = serializer_factory(value)
++        result, imports = serializer.serialize()
++        print(f"Serialization result: {result}")
++        print(f"Imports: {imports}")
++        return True
++    except Exception as e:
++        print(f"Error: {e}")
++        return False
++
++# Test cases
++test_cases = [
++    (re.UNICODE, "Single flag (UNICODE)"),
++    (re.IGNORECASE, "Single flag (IGNORECASE)"),
++    (re.UNICODE | re.IGNORECASE, "Two flags combined"),
++    (re.UNICODE | re.IGNORECASE | re.MULTILINE, "Three flags combined"),
++    (re.MULTILINE | re.DOTALL, "Different two flags"),
++]
++
++all_passed = True
++for value, desc in test_cases:
++    passed = test_serialization(value, desc)
++    all_passed = all_passed and passed
++
++print(f"\n=== Summary ===")
++print(f"All tests passed: {all_passed}")
+diff --git a/test_enum_decompose.py b/test_enum_decompose.py
+new file mode 100644
+index 0000000000..7c3fabdc79
+--- /dev/null
++++ b/test_enum_decompose.py
+@@ -0,0 +1,21 @@
++import re
++import enum
++
++# Test if _decompose method exists
++regex_flags = re.UNICODE | re.IGNORECASE
++print("Testing _decompose method:")
++print("Has _decompose:", hasattr(regex_flags, '_decompose'))
++
++if hasattr(regex_flags, '_decompose'):
++    result = regex_flags._decompose(regex_flags)
++    print("_decompose result:", result)
++    
++    # Test getting names from individual flags
++    for flag in result:
++        print(f"Flag: {flag}, Name: {flag.name}")
++
++# Also test with a single flag
++single_flag = re.UNICODE
++print("\nSingle flag test:")
++print("Single flag:", single_flag)
++print("Single flag name:", single_flag.name)
+diff --git a/test_enum_issue.py b/test_enum_issue.py
+new file mode 100644
+index 0000000000..489c88400d
+--- /dev/null
++++ b/test_enum_issue.py
+@@ -0,0 +1,17 @@
++import re
++from django.db.migrations.serializer import serializer_factory
++
++# Test the current issue with combined enum flags
++regex_flags = re.UNICODE | re.IGNORECASE
++print("Testing combined enum flags:", regex_flags)
++print("Type:", type(regex_flags))
++print("Value:", regex_flags)
++
++try:
++    serializer = serializer_factory(regex_flags)
++    result, imports = serializer.serialize()
++    print("Serialization result:", result)
++    print("Imports:", imports)
++except Exception as e:
++    print("Error:", e)
++    print("Error type:", type(e))
+diff --git a/test_enum_methods.py b/test_enum_methods.py
+new file mode 100644
+index 0000000000..ff314cf873
+--- /dev/null
++++ b/test_enum_methods.py
+@@ -0,0 +1,28 @@
++import re
++import enum
++
++# Test different ways to decompose enum flags
++regex_flags = re.UNICODE | re.IGNORECASE
++print("Combined flags:", regex_flags)
++print("Enum class:", type(regex_flags))
++print("Enum class type:", type(regex_flags).__mro__)
++
++# Check if _decompose is on the class
++print("\nChecking _decompose on class:")
++print("Class has _decompose:", hasattr(type(regex_flags), '_decompose'))
++
++if hasattr(type(regex_flags), '_decompose'):
++    result = type(regex_flags)._decompose(regex_flags)
++    print("_decompose result:", result)
++
++# Check other methods
++print("\nAvailable methods on enum class:")
++for attr in dir(type(regex_flags)):
++    if not attr.startswith('__'):
++        print(f"  {attr}")
++
++# Try to manually decompose by checking individual flags
++print("\nManual decomposition:")
++for flag in re.RegexFlag:
++    if flag in regex_flags:
++        print(f"  Found flag: {flag} (name: {flag.name})")
+diff --git a/test_migration_scenario.py b/test_migration_scenario.py
+new file mode 100644
+index 0000000000..8ee804f8e1
+--- /dev/null
++++ b/test_migration_scenario.py
+@@ -0,0 +1,50 @@
++import re
++import django
++from django.conf import settings
++from django.db import models
++from django.db.migrations.serializer import serializer_factory
++
++# Configure Django settings
++if not settings.configured:
++    settings.configure(
++        DEBUG=True,
++        DATABASES={
++            'default': {
++                'ENGINE': 'django.db.backends.sqlite3',
++                'NAME': ':memory:',
++            }
++        },
++        INSTALLED_APPS=[
++            'django.contrib.contenttypes',
++            'django.contrib.auth',
++        ],
++        SECRET_KEY='test-secret-key',
++    )
++    django.setup()
++
++# Test the field directly without creating a full model
++field = models.IntegerField(default=re.UNICODE | re.IGNORECASE)
++print(f"Field: {field}")
++print(f"Field default: {field.default}")
++print(f"Field default type: {type(field.default)}")
++
++# Test serialization of the field (this is what migrations use)
++try:
++    field_serializer = serializer_factory(field)
++    field_result, field_imports = field_serializer.serialize()
++    print(f"\nField serialization result: {field_result}")
++    print(f"Field imports: {field_imports}")
++except Exception as e:
++    print(f"Error during field serialization: {e}")
++
++# Test serialization of the default value specifically
++try:
++    default_serializer = serializer_factory(field.default)
++    default_result, default_imports = default_serializer.serialize()
++    print(f"\nDefault value serialization result: {default_result}")
++    print(f"Default value imports: {default_imports}")
++except Exception as e:
++    print(f"Error during default serialization: {e}")
++
++print(f"\n=== Migration would now contain ===")
++print(f"    regex_flags = models.IntegerField(default={default_result})")
+diff --git a/test_other_enums.py b/test_other_enums.py
+new file mode 100644
+index 0000000000..4f9b19fb05
+--- /dev/null
++++ b/test_other_enums.py
+@@ -0,0 +1,41 @@
++import enum
++from django.db.migrations.serializer import serializer_factory
++
++# Create a custom enum with flag behavior
++class Permission(enum.IntFlag):
++    READ = 1
++    WRITE = 2
++    EXECUTE = 4
++    ADMIN = 8
++
++def test_serialization(value, description):
++    print(f"\n=== {description} ===")
++    print(f"Value: {value}")
++    print(f"Type: {type(value)}")
++    
++    try:
++        serializer = serializer_factory(value)
++        result, imports = serializer.serialize()
++        print(f"Serialization result: {result}")
++        print(f"Imports: {imports}")
++        return True
++    except Exception as e:
++        print(f"Error: {e}")
++        return False
++
++# Test cases with custom enum
++test_cases = [
++    (Permission.READ, "Single permission (READ)"),
++    (Permission.WRITE, "Single permission (WRITE)"),
++    (Permission.READ | Permission.WRITE, "Two permissions combined"),
++    (Permission.READ | Permission.WRITE | Permission.EXECUTE, "Three permissions combined"),
++    (Permission.ADMIN, "Single permission (ADMIN)"),
++]
++
++all_passed = True
++for value, desc in test_cases:
++    passed = test_serialization(value, desc)
++    all_passed = all_passed and passed
++
++print(f"\n=== Summary ===")
++print(f"All tests passed: {all_passed}")

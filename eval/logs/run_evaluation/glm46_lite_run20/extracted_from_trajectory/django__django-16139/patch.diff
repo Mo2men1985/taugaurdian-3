@@ -1,0 +1,497 @@
+diff --git a/django/contrib/auth/forms.py b/django/contrib/auth/forms.py
+index b3cfc6723c..28462a9bc6 100644
+--- a/django/contrib/auth/forms.py
++++ b/django/contrib/auth/forms.py
+@@ -163,7 +163,10 @@ class UserChangeForm(forms.ModelForm):
+         super().__init__(*args, **kwargs)
+         password = self.fields.get("password")
+         if password:
+-            password.help_text = password.help_text.format("../password/")
++            if self.instance and self.instance.pk:
++                password.help_text = password.help_text.format(f"../../{self.instance.pk}/password/")
++            else:
++                password.help_text = password.help_text.format("../password/")
+         user_permissions = self.fields.get("user_permissions")
+         if user_permissions:
+             user_permissions.queryset = user_permissions.queryset.select_related(
+diff --git a/temp_fix.py b/temp_fix.py
+new file mode 100644
+index 0000000000..82d31ea796
+--- /dev/null
++++ b/temp_fix.py
+@@ -0,0 +1,17 @@
++import re
++
++# Read the file
++with open('./django/contrib/auth/forms.py', 'r') as f:
++    content = f.read()
++
++# Find and replace the problematic line
++old_pattern = r'(\s+)password\.help_text = password\.help_text\.format\("\.\.\/password\/"\)'
++new_code = r'\1if self.instance and self.instance.pk:\n\1    password.help_text = password.help_text.format(f"../../{self.instance.pk}/password/")\n\1else:\n\1    password.help_text = password.help_text.format("../password/")'
++
++content = re.sub(old_pattern, new_code, content)
++
++# Write back to file
++with open('./django/contrib/auth/forms.py', 'w') as f:
++    f.write(content)
++
++print("Fixed the password help_text logic")
+diff --git a/test_admin_url_scenario.py b/test_admin_url_scenario.py
+new file mode 100644
+index 0000000000..cabf3c57d9
+--- /dev/null
++++ b/test_admin_url_scenario.py
+@@ -0,0 +1,163 @@
++#!/usr/bin/env python
++"""
++Test script to verify the password link fix in a more realistic admin scenario.
++This simulates accessing UserAdmin via different URL patterns.
++"""
++
++import os
++import sys
++import django
++from django.conf import settings
++
++# Add the testbed directory to Python path
++sys.path.insert(0, '/testbed')
++
++# Configure Django settings
++if not settings.configured:
++    settings.configure(
++        DEBUG=True,
++        DATABASES={
++            'default': {
++                'ENGINE': 'django.db.backends.sqlite3',
++                'NAME': ':memory:',
++            }
++        },
++        INSTALLED_APPS=[
++            'django.contrib.auth',
++            'django.contrib.contenttypes',
++            'django.contrib.admin',
++            'django.contrib.sessions',
++            'django.contrib.messages',
++        ],
++        SECRET_KEY='test-secret-key',
++        USE_TZ=True,
++        ROOT_URLCONF='django.contrib.admin.urls',
++    )
++
++django.setup()
++
++# Create database tables
++from django.core.management import call_command
++call_command('migrate', verbosity=0, interactive=False)
++
++from django.contrib.auth.models import User
++from django.contrib.auth.forms import UserChangeForm
++from django.test import RequestFactory
++from django.contrib.admin.sites import site
++
++def test_password_link_generation():
++    """Test password link generation in different admin access scenarios."""
++    
++    # Create a test user
++    user = User.objects.create_user(
++        username='testuser',
++        email='test@example.com',
++        password='testpass123'
++    )
++    
++    print(f"Created test user with ID: {user.pk}")
++    
++    # Test 1: Regular UserChangeForm instantiation
++    print("\n1. Testing regular UserChangeForm instantiation:")
++    form = UserChangeForm(instance=user)
++    password_field = form.fields.get('password')
++    if password_field:
++        help_text = password_field.help_text
++        print(f"   Help text: {help_text}")
++        
++        # Extract the href from the help text
++        import re
++        match = re.search(r'href="([^"]+)"', help_text)
++        if match:
++            href = match.group(1)
++            print(f"   Extracted href: {href}")
++            
++            # Check if it contains the user's pk
++            if f"{user.pk}/password/" in href:
++                print("   ✅ SUCCESS: Link contains user's primary key")
++            else:
++                print("   ❌ FAILURE: Link does not contain user's primary key")
++                return False
++        else:
++            print("   ❌ FAILURE: Could not extract href from help text")
++            return False
++    else:
++        print("   ❌ FAILURE: Password field not found")
++        return False
++    
++    # Test 2: Test with different user to ensure pk is dynamic
++    print("\n2. Testing with another user:")
++    user2 = User.objects.create_user(
++        username='testuser2',
++        email='test2@example.com',
++        password='testpass123'
++    )
++    
++    form2 = UserChangeForm(instance=user2)
++    password_field2 = form2.fields.get('password')
++    if password_field2:
++        help_text2 = password_field2.help_text
++        print(f"   Help text: {help_text2}")
++        
++        import re
++        match = re.search(r'href="([^"]+)"', help_text2)
++        if match:
++            href = match.group(1)
++            print(f"   Extracted href: {href}")
++            
++            # Check if it contains the second user's pk (not the first one)
++            if f"{user2.pk}/password/" in href and f"{user.pk}/password/" not in href:
++                print("   ✅ SUCCESS: Link contains correct user's primary key")
++            else:
++                print("   ❌ FAILURE: Link contains wrong primary key")
++                return False
++        else:
++            print("   ❌ FAILURE: Could not extract href from help text")
++            return False
++    else:
++        print("   ❌ FAILURE: Password field not found")
++        return False
++    
++    # Test 3: Verify the old hardcoded path is no longer present
++    print("\n3. Testing that old hardcoded path is gone:")
++    form3 = UserChangeForm(instance=user)
++    password_field3 = form3.fields.get('password')
++    if password_field3:
++        help_text3 = password_field3.help_text
++        if "../password/" in help_text3:
++            print("   ❌ FAILURE: Old hardcoded path '../password/' still present")
++            return False
++        else:
++            print("   ✅ SUCCESS: Old hardcoded path '../password/' is gone")
++    
++    return True
++
++def test_url_structure_analysis():
++    """Analyze the URL structure to understand the fix."""
++    print("\n4. URL Structure Analysis:")
++    print("   When accessing UserAdmin via to_field (e.g., uuid):")
++    print("   URL: /admin/auth/user/uuid-value/change/?_to_field=uuid")
++    print("   The password change URL should be: /admin/auth/user/pk/password/")
++    print("   Relative path from change form: ../../pk/password/")
++    print("")
++    print("   When accessing UserAdmin via pk:")
++    print("   URL: /admin/auth/user/pk/change/")
++    print("   The password change URL should be: /admin/auth/user/pk/password/")
++    print("   Relative path from change form: ../../pk/password/")
++    print("")
++    print("   ✅ Both scenarios now use the same relative path: ../../{pk}/password/")
++
++if __name__ == '__main__':
++    print("Testing password link fix in UserChangeForm - Admin URL Scenario")
++    print("=" * 70)
++    
++    test_result = test_password_link_generation()
++    test_url_structure_analysis()
++    
++    print("\n" + "=" * 70)
++    if test_result:
++        print("🎉 ALL TESTS PASSED! The fix works correctly for admin URL scenarios.")
++        sys.exit(0)
++    else:
++        print("💥 SOME TESTS FAILED!")
++        sys.exit(1)
+diff --git a/test_edge_cases.py b/test_edge_cases.py
+new file mode 100644
+index 0000000000..0536e14c49
+--- /dev/null
++++ b/test_edge_cases.py
+@@ -0,0 +1,144 @@
++#!/usr/bin/env python
++"""
++Test edge cases for the password link fix in UserChangeForm.
++"""
++
++import os
++import sys
++import django
++from django.conf import settings
++
++# Add the testbed directory to Python path
++sys.path.insert(0, '/testbed')
++
++# Configure Django settings
++if not settings.configured:
++    settings.configure(
++        DEBUG=True,
++        DATABASES={
++            'default': {
++                'ENGINE': 'django.db.backends.sqlite3',
++                'NAME': ':memory:',
++            }
++        },
++        INSTALLED_APPS=[
++            'django.contrib.auth',
++            'django.contrib.contenttypes',
++            'django.contrib.admin',
++            'django.contrib.sessions',
++            'django.contrib.messages',
++        ],
++        SECRET_KEY='test-secret-key',
++        USE_TZ=True,
++    )
++
++django.setup()
++
++# Create database tables
++from django.core.management import call_command
++call_command('migrate', verbosity=0, interactive=False)
++
++from django.contrib.auth.models import User
++from django.contrib.auth.forms import UserChangeForm
++
++def test_unsaved_instance():
++    """Test UserChangeForm with an unsaved instance (no pk yet)."""
++    print("Testing UserChangeForm with unsaved instance:")
++    
++    # Create a user instance but don't save it
++    user = User(username='newuser', email='new@example.com')
++    # user.pk will be None at this point
++    
++    try:
++        form = UserChangeForm(instance=user)
++        password_field = form.fields.get('password')
++        if password_field:
++            help_text = password_field.help_text
++            print(f"   Help text: {help_text}")
++            
++            # For unsaved instances, should fall back to the old path
++            if "../password/" in help_text:
++                print("   ✅ SUCCESS: Correctly falls back to '../password/' for unsaved instance")
++                return True
++            elif "None/password/" in help_text:
++                print("   ❌ FAILURE: Contains 'None' instead of falling back")
++                return False
++            else:
++                print("   ❌ FAILURE: Unexpected behavior for unsaved instance")
++                return False
++        else:
++            print("   ❌ FAILURE: Password field not found")
++            return False
++    except Exception as e:
++        print(f"   ❌ FAILURE: Exception occurred: {e}")
++        return False
++
++def test_form_without_instance():
++    """Test UserChangeForm without an instance."""
++    print("\nTesting UserChangeForm without instance:")
++    
++    try:
++        form = UserChangeForm()
++        password_field = form.fields.get('password')
++        if password_field:
++            help_text = password_field.help_text
++            print(f"   Help text: {help_text}")
++            
++            # For no instance, should fall back to the old path
++            if "../password/" in help_text:
++                print("   ✅ SUCCESS: Correctly falls back to '../password/' for no instance")
++                return True
++            elif "None/password/" in help_text:
++                print("   ❌ FAILURE: Contains 'None' instead of falling back")
++                return False
++            else:
++                print("   ❌ FAILURE: Unexpected behavior for no instance")
++                return False
++        else:
++            print("   ❌ FAILURE: Password field not found")
++            return False
++    except Exception as e:
++        print(f"   ❌ FAILURE: Exception occurred: {e}")
++        return False
++
++def test_saved_instance():
++    """Test with a properly saved instance to ensure normal case still works."""
++    print("\nTesting with properly saved instance:")
++    
++    user = User.objects.create_user(
++        username='saveduser',
++        email='saved@example.com',
++        password='testpass123'
++    )
++    
++    form = UserChangeForm(instance=user)
++    password_field = form.fields.get('password')
++    if password_field:
++        help_text = password_field.help_text
++        print(f"   Help text: {help_text}")
++        
++        if f"{user.pk}/password/" in help_text:
++            print(f"   ✅ SUCCESS: Link contains correct pk: {user.pk}")
++            return True
++        else:
++            print("   ❌ FAILURE: Link does not contain correct pk")
++            return False
++    else:
++        print("   ❌ FAILURE: Password field not found")
++        return False
++
++if __name__ == '__main__':
++    print("Testing edge cases for password link fix in UserChangeForm")
++    print("=" * 60)
++    
++    test1 = test_unsaved_instance()
++    test2 = test_form_without_instance()
++    test3 = test_saved_instance()
++    
++    print("\n" + "=" * 60)
++    if test1 and test2 and test3:
++        print("🎉 ALL EDGE CASE TESTS PASSED!")
++        sys.exit(0)
++    else:
++        print("💥 SOME EDGE CASE TESTS FAILED!")
++        sys.exit(1)
+diff --git a/test_password_link_fix.py b/test_password_link_fix.py
+new file mode 100644
+index 0000000000..fab795c908
+--- /dev/null
++++ b/test_password_link_fix.py
+@@ -0,0 +1,133 @@
++#!/usr/bin/env python
++"""
++Test script to verify the password link fix in UserChangeForm.
++This script tests the scenario where UserAdmin is accessed via a to_field (like uuid).
++"""
++
++import os
++import sys
++import django
++from django.conf import settings
++from django.core.management import execute_from_command_line
++
++# Add the testbed directory to Python path
++sys.path.insert(0, '/testbed')
++
++# Configure Django settings
++if not settings.configured:
++    settings.configure(
++        DEBUG=True,
++        DATABASES={
++            'default': {
++                'ENGINE': 'django.db.backends.sqlite3',
++                'NAME': ':memory:',
++            }
++        },
++        INSTALLED_APPS=[
++            'django.contrib.auth',
++            'django.contrib.contenttypes',
++            'django.contrib.admin',
++            'django.contrib.sessions',
++            'django.contrib.messages',
++        ],
++        SECRET_KEY='test-secret-key',
++        USE_TZ=True,
++    )
++
++django.setup()
++
++# Create database tables
++from django.core.management import call_command
++call_command('migrate', verbosity=0, interactive=False)
++
++from django.contrib.auth.models import User
++from django.contrib.auth.forms import UserChangeForm
++
++def test_password_link_with_uuid_access():
++    """Test that password link works correctly when accessing via to_field."""
++    
++    # Create a test user
++    user = User.objects.create_user(
++        username='testuser',
++        email='test@example.com',
++        password='testpass123'
++    )
++    
++    # Simulate accessing UserAdmin via to_field (like uuid)
++    # This is the scenario described in the PR where the URL would be:
++    # .../user/22222222-3333-4444-5555-666677778888/change/?_to_field=uuid
++    
++    # Create the form with the user instance
++    form = UserChangeForm(instance=user)
++    
++    # Get the password field's help text
++    password_field = form.fields.get('password')
++    if password_field:
++        help_text = password_field.help_text
++        print(f"Password help text: {help_text}")
++        
++        # Check if the help text contains the correct link pattern
++        # The fix should generate a link like: ../../{pk}/password/
++        expected_pattern = f"../../{user.pk}/password/"
++        
++        if expected_pattern in help_text:
++            print(f"✅ SUCCESS: Password link contains correct pattern: {expected_pattern}")
++            return True
++        else:
++            print(f"❌ FAILURE: Password link does not contain expected pattern: {expected_pattern}")
++            print(f"Actual help text: {help_text}")
++            return False
++    else:
++        print("❌ FAILURE: Password field not found in form")
++        return False
++
++def test_password_link_with_regular_access():
++    """Test that password link still works with regular pk access."""
++    
++    # Create a test user
++    user = User.objects.create_user(
++        username='testuser2',
++        email='test2@example.com',
++        password='testpass123'
++    )
++    
++    # Create the form with the user instance (regular access)
++    form = UserChangeForm(instance=user)
++    
++    # Get the password field's help text
++    password_field = form.fields.get('password')
++    if password_field:
++        help_text = password_field.help_text
++        print(f"Regular access password help text: {help_text}")
++        
++        # The fix should still work for regular access
++        expected_pattern = f"../../{user.pk}/password/"
++        
++        if expected_pattern in help_text:
++            print(f"✅ SUCCESS: Regular access password link contains correct pattern: {expected_pattern}")
++            return True
++        else:
++            print(f"❌ FAILURE: Regular access password link does not contain expected pattern: {expected_pattern}")
++            return False
++    else:
++        print("❌ FAILURE: Password field not found in form")
++        return False
++
++if __name__ == '__main__':
++    print("Testing password link fix in UserChangeForm...")
++    print("=" * 50)
++    
++    # Test the scenario described in the PR
++    print("\n1. Testing UUID/to_field access scenario:")
++    test1_result = test_password_link_with_uuid_access()
++    
++    print("\n2. Testing regular pk access scenario:")
++    test2_result = test_password_link_with_regular_access()
++    
++    print("\n" + "=" * 50)
++    if test1_result and test2_result:
++        print("🎉 ALL TESTS PASSED! The fix works correctly.")
++        sys.exit(0)
++    else:
++        print("💥 SOME TESTS FAILED!")
++        sys.exit(1)

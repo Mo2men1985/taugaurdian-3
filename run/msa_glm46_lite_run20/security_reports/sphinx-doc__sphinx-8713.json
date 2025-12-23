@@ -1,0 +1,30 @@
+{
+  "instance_id": "sphinx-doc__sphinx-8713",
+  "repo": "sphinx-doc/sphinx",
+  "base_commit": "3ed7590ed411bd93b26098faab4f23619cdb2267",
+  "scan_scope": "postapply_fullfile_delta_v1",
+  "scan_failed": false,
+  "scan_error": null,
+  "skipped": false,
+  "skip_reason": null,
+  "changed_files": [
+    "setup.py",
+    "sphinx/ext/napoleon/docstring.py",
+    "tox.ini"
+  ],
+  "files": [
+    {
+      "path": "setup.py",
+      "before_violations": [],
+      "after_violations": [],
+      "new_violations": []
+    },
+    {
+      "path": "sphinx/ext/napoleon/docstring.py",
+      "before_violations": [],
+      "after_violations": [],
+      "new_violations": []
+    }
+  ],
+  "new_violations": []
+}

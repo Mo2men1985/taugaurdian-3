@@ -1,0 +1,19 @@
+instances_by_exit_status:
+    CalledProcessError:
+    - scikit-learn__scikit-learn-25638
+    LimitsExceeded:
+    - django__django-12284
+    Submitted:
+    - django__django-16139
+    - sympy__sympy-13773
+    - django__django-12497
+    - django__django-15320
+    - sympy__sympy-15308
+    - scikit-learn__scikit-learn-13439
+    - matplotlib__matplotlib-18869
+    - django__django-11620
+    - sympy__sympy-11897
+    - django__django-11848
+    - sympy__sympy-24066
+    - django__django-15996
+    - sphinx-doc__sphinx-8713

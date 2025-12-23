@@ -1,0 +1,26 @@
+{
+  "instance_id": "sympy__sympy-22840",
+  "repo": "sympy/sympy",
+  "base_commit": "d822fcba181155b85ff2b29fe525adbafb22b448",
+  "scan_scope": "postapply_fullfile_delta_v1",
+  "scan_failed": false,
+  "scan_error": null,
+  "skipped": false,
+  "skip_reason": null,
+  "changed_files": [
+    "sympy/simplify/cse_main.py"
+  ],
+  "files": [
+    {
+      "path": "sympy/simplify/cse_main.py",
+      "before_violations": [
+        "NO_TRANSACTION_FOR_MULTI_WRITE"
+      ],
+      "after_violations": [
+        "NO_TRANSACTION_FOR_MULTI_WRITE"
+      ],
+      "new_violations": []
+    }
+  ],
+  "new_violations": []
+}

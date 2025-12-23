@@ -1,0 +1,8 @@
+[tg_run_audit] Audit report
+  predictions_path      : /home/mo2men1985/projects/tau_guardian_harness9/msa_glm46_lite_run20/preds_filled.json
+  instance_results_path : /home/mo2men1985/projects/tau_guardian_harness9/msa_glm46_lite_run20/eval/instance_results.jsonl
+  metadata_path         : /home/mo2men1985/projects/tau_guardian_harness9/msa_glm46_lite_run20/eval/instance_results.metadata.json
+  instance_results_rows : 18
+  security_reports_dir  : /home/mo2men1985/projects/tau_guardian_harness9/msa_glm46_lite_run20/security_reports
+  security_reports_rows : 18
+  scan_failed_count     : 0

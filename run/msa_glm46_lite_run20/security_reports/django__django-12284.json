@@ -1,0 +1,13 @@
+{
+  "instance_id": "django__django-12284",
+  "repo": "django/django",
+  "base_commit": "c5e373d48cbdd923575956fed477b63d66d9603f",
+  "scan_scope": "postapply_fullfile_delta_v1",
+  "scan_failed": false,
+  "scan_error": null,
+  "skipped": true,
+  "skip_reason": "EMPTY_PATCH",
+  "changed_files": [],
+  "files": [],
+  "new_violations": []
+}
