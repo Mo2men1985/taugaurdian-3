@@ -11,14 +11,58 @@ Usage:
 
 import argparse
 import json
+import os
 import re
 import sys
 from pathlib import Path
 from typing import Any, Dict, List
 
+try:
+    import yaml  # type: ignore
+except ImportError:  # pragma: no cover
+    yaml = None  # type: ignore
+
+
+def _default_policy_path() -> Path:
+    # code/tg_traj_risk_analyzer.py -> <repo_root>/policy/default_policy.yaml
+    return Path(__file__).resolve().parents[1] / "policy" / "default_policy.yaml"
+
+
+def load_policy(policy_path: Path = None) -> dict:
+    if policy_path is None:
+        env = os.environ.get("TAUGUARDIAN_POLICY", "").strip()
+        policy_path = Path(env).expanduser() if env else _default_policy_path()
+    policy_path = Path(policy_path).expanduser()
+    if not policy_path.exists():
+        return {}
+    if yaml is None:
+        raise RuntimeError("PyYAML is required to load policy YAML. Install with: pip install pyyaml")
+    with open(policy_path, "r", encoding="utf-8") as f:
+        obj = yaml.safe_load(f)  # type: ignore[attr-defined]
+    return obj if isinstance(obj, dict) else {}
+
+
+def load_command_patterns_from_policy(policy: dict):
+    patterns = []
+    traj_cfg = policy.get("trajectory") if isinstance(policy, dict) else None
+    items = (traj_cfg or {}).get("command_patterns") if isinstance(traj_cfg, dict) else None
+    if not isinstance(items, list):
+        return patterns
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+        code = str(item.get("code") or "").strip()
+        regex = str(item.get("regex") or "").strip()
+        severity = str(item.get("severity") or "high").strip()
+        explanation = str(item.get("explanation") or "").strip()
+        if not code or not regex:
+            continue
+        patterns.append((code, re.compile(regex), severity, explanation))
+    return patterns
+
 # --- Risk Rules Definition ---
 
-COMMAND_PATTERNS = [
+DEFAULT_COMMAND_PATTERNS = [
     # (code, regex, severity, explanation)
     (
         "COMMAND_PACKAGE_INSTALL",
@@ -57,6 +101,8 @@ COMMAND_PATTERNS = [
         "Potentially destructive root/current directory deletion",
     ),
 ]
+
+COMMAND_PATTERNS = list(DEFAULT_COMMAND_PATTERNS)
 
 # Commands that are part of normal testing / version control and should be ignored
 SAFE_PATTERNS = [
@@ -196,13 +242,32 @@ def main() -> None:
         default=Path("agentic_risk.jsonl"),
         help="Output JSONL path",
     )
+    parser.add_argument(
+        "--policy",
+        type=Path,
+        default=None,
+        help="Policy YAML path (default: policy/default_policy.yaml). Also respects TAUGUARDIAN_POLICY.",
+    )
     args = parser.parse_args()
+
+    # Policy override (optional): load command_patterns from policy YAML.
+    try:
+        policy = load_policy(args.policy)
+        cmdp = load_command_patterns_from_policy(policy)
+        if cmdp:
+            global COMMAND_PATTERNS
+            COMMAND_PATTERNS = cmdp
+    except Exception as exc:
+        print(f"[ERROR] Failed to load policy: {exc}", file=sys.stderr)
+        sys.exit(2)
 
     if not args.msa_dir.exists():
         print(f"Error: {args.msa_dir} does not exist.", file=sys.stderr)
         sys.exit(1)
 
     traj_files = sorted(args.msa_dir.glob("*.traj.json"))
+    if not traj_files:
+        traj_files = sorted((args.msa_dir / "trajs").glob("*.traj.json"))
     if not traj_files:
         print(f"No trajectory files found in {args.msa_dir}")
         sys.exit(0)

@@ -21,6 +21,11 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional, Tuple
 
+try:
+    import yaml  # type: ignore
+except ImportError:  # pragma: no cover
+    yaml = None  # type: ignore
+
 
 def sha256_file(path: Path) -> str:
     h = hashlib.sha256()
@@ -28,6 +33,11 @@ def sha256_file(path: Path) -> str:
         for chunk in iter(lambda: f.read(1024 * 1024), b""):
             h.update(chunk)
     return h.hexdigest()
+
+
+def _default_policy_path() -> Path:
+    # audit_proof_bundle.py -> <repo_root>/policy/default_policy.yaml
+    return Path(__file__).resolve().parent / "policy" / "default_policy.yaml"
 
 
 def sha256_dir(path: Path) -> Dict[str, str]:
@@ -147,6 +157,7 @@ def main() -> int:
     ap.add_argument("run_dir", help="mini-swe-agent run directory (RUN)")
     ap.add_argument("--model-id", default="", help="provider model id (for manifest metadata)")
     ap.add_argument("--tag", default="", help="freeform tag (for manifest metadata)")
+    ap.add_argument("--policy", default=None, help="policy yaml path to record (also respects TAUGUARDIAN_POLICY)")
     args = ap.parse_args()
 
     run_dir = Path(args.run_dir).resolve()
@@ -166,6 +177,7 @@ def main() -> int:
         "run_dir": str(run_dir),
         "model_id": args.model_id,
         "tag": args.tag,
+        "policy": {},
         "artifacts": {
             "minisweagent.log": str(miniswe_log) if miniswe_log.exists() else None,
             "preds_filled.json": str(preds) if preds.exists() else None,
@@ -189,6 +201,37 @@ def main() -> int:
             "governance": summarize_governance(governed),
         },
     }
+
+    # Policy (optional): record policy version + sha256 for auditability
+    policy_path: Optional[Path] = None
+    if args.policy:
+        policy_path = Path(str(args.policy)).expanduser().resolve()
+    else:
+        env = os.environ.get("TAUGUARDIAN_POLICY", "").strip()
+        policy_path = Path(env).expanduser().resolve() if env else None
+        if policy_path is None:
+            dp = _default_policy_path()
+            policy_path = dp if dp.exists() else None
+
+    policy_sha = ""
+    policy_ver = ""
+    policy_path_str = ""
+    if policy_path is not None and policy_path.exists():
+        policy_path_str = str(policy_path)
+        policy_sha = sha256_file(policy_path)
+        if yaml is not None:
+            try:
+                with policy_path.open("r", encoding="utf-8") as f:
+                    pobj = yaml.safe_load(f)  # type: ignore[attr-defined]
+                if isinstance(pobj, dict):
+                    policy_ver = str(pobj.get("version") or "")
+            except Exception as exc:
+                manifest.setdefault("warnings", []).append(f"policy_parse_error: {exc}")
+        else:
+            manifest.setdefault("warnings", []).append("policy_yaml_unavailable: install pyyaml to parse version")
+
+    if isinstance(manifest.get("policy"), dict):
+        manifest["policy"].update({"path": policy_path_str, "sha256": policy_sha, "version": policy_ver})
 
     out_path = run_dir / "proof_manifest.json"
     out_path.write_text(json.dumps(manifest, indent=2, sort_keys=True), encoding="utf-8")

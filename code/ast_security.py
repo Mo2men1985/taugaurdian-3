@@ -1,5 +1,70 @@
 import ast
+import os
+from pathlib import Path
 from typing import Iterable, List, Optional, Set
+
+try:
+    import yaml  # type: ignore
+except ImportError:  # pragma: no cover
+    yaml = None  # type: ignore
+
+
+def _default_policy_path() -> Path:
+    # code/ast_security.py -> <repo_root>/policy/default_policy.yaml
+    return Path(__file__).resolve().parents[1] / "policy" / "default_policy.yaml"
+
+
+def load_policy(policy_path: Optional[Path] = None) -> dict:
+    """Load τGuardian policy YAML (Policy-as-Data).
+
+    Resolution order:
+      1) explicit policy_path argument
+      2) TAUGUARDIAN_POLICY env var
+      3) repo_root/policy/default_policy.yaml
+
+    Returns {} if the policy file is missing.
+    """
+    if policy_path is None:
+        env = os.environ.get("TAUGUARDIAN_POLICY", "").strip()
+        policy_path = Path(env).expanduser() if env else _default_policy_path()
+
+    policy_path = Path(policy_path).expanduser()
+    if not policy_path.exists():
+        return {}
+
+    if yaml is None:
+        raise RuntimeError(
+            "PyYAML is required to load policy YAML. Install with: pip install pyyaml"
+        )
+
+    with open(policy_path, "r", encoding="utf-8") as f:
+        obj = yaml.safe_load(f)  # type: ignore[attr-defined]
+    return obj if isinstance(obj, dict) else {}
+
+
+def policy_version(policy: Optional[dict] = None) -> str:
+    policy = policy or load_policy(None)
+    v = policy.get("version") if isinstance(policy, dict) else None
+    return str(v or "")
+
+
+def violation_severity(code: str, policy: Optional[dict] = None, default: str = "high") -> str:
+    """Map AST violation code -> severity using policy.ast.severity_map."""
+    policy = policy or load_policy(None)
+    sev_map = {}
+    try:
+        ast_cfg = policy.get("ast") if isinstance(policy, dict) else {}
+        sev_map = (ast_cfg or {}).get("severity_map") or {}
+    except Exception:
+        sev_map = {}
+    sev = sev_map.get(code) if isinstance(sev_map, dict) else None
+    return str(sev or default)
+
+
+def violations_with_severity(codes: Iterable[str], policy: Optional[dict] = None) -> List[dict]:
+    """Return [{"code": <tag>, "severity": <sev>} ...] for AST findings."""
+    policy = policy or load_policy(None)
+    return [{"code": str(c), "severity": violation_severity(str(c), policy=policy)} for c in codes]
 
 
 RULEPACK_VERSION = "v1.5"

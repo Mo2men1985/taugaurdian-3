@@ -177,6 +177,32 @@ def test_infra_timeout_before_patch_bucket(tmp_path: Path) -> None:
     assert row["infra_timeout_before_patch"] is True
 
 
+def test_invalid_submission_abstains(tmp_path: Path) -> None:
+    msa_dir = tmp_path / "msa"
+    msa_dir.mkdir()
+
+    preds = [{"instance_id": "demo__proj-invalid", "model_patch": "not a diff"}]
+    (msa_dir / "preds.json").write_text(json.dumps(preds), encoding="utf-8")
+    _write_exit_status(msa_dir, ["demo__proj-invalid"], "Submitted")
+
+    output_path = tmp_path / "eval.jsonl"
+    total, success = build_eval_records(
+        msa_dir=msa_dir,
+        model_id="demo-model",
+        output_path=output_path,
+        instance_results_path=None,
+    )
+
+    assert total == 1
+    assert success == 0
+
+    row = json.loads(output_path.read_text(encoding="utf-8").splitlines()[0])
+    assert row["submission_valid"] is False
+    assert row["patch_bytes"] == 0
+    assert row["final_decision"] == "ABSTAIN"
+    assert row["decision_reason"] == "empty_or_invalid_patch"
+
+
 def test_security_report_overrides_fallback_to_ok(tmp_path: Path) -> None:
     msa_dir = tmp_path / "msa"
     msa_dir.mkdir()

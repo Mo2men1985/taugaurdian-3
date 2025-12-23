@@ -14,6 +14,7 @@ set -euo pipefail
 # - proof_bundle.tgz
 
 CONFIG=""
+POLICY="policy/default_policy.yaml"
 MODEL_ID=""
 SLICE=""
 TAG="run"
@@ -55,11 +56,36 @@ while [[ $# -gt 0 ]]; do
   case "$1" in
     --config) CONFIG="$2"; shift 2;;
     --model-id) MODEL_ID="$2"; shift 2;;
+    --policy) POLICY="$2"; shift 2;;
     --slice) SLICE="$2"; shift 2;;
     --tag) TAG="$2"; shift 2;;
     *) echo "Unknown arg: $1" >&2; exit 2;;
   esac
 done
+
+# Resolve policy path (default: policy/default_policy.yaml) and export for downstream scripts.
+POLICY_PATH=""
+if [[ -n "${POLICY}" ]]; then
+  if [[ -f "$POLICY" ]]; then
+    POLICY_PATH="$(python - <<PY
+from pathlib import Path
+print(Path("$POLICY").expanduser().resolve())
+PY
+)"
+  elif [[ -f "$ROOT/$POLICY" ]]; then
+    POLICY_PATH="$(python - <<PY
+from pathlib import Path
+print((Path("$ROOT")/"$POLICY").expanduser().resolve())
+PY
+)"
+  else
+    echo "[WARN] policy not found: $POLICY (continuing without policy)"
+    POLICY_PATH=""
+  fi
+fi
+if [[ -n "$POLICY_PATH" ]]; then
+  export TAUGUARDIAN_POLICY="$POLICY_PATH"
+fi
 
 if [[ -z "${CONFIG}" || -z "${MODEL_ID}" || -z "${SLICE}" ]]; then
   echo "Usage: $0 --config ./swebench_glm46.yaml --model-id \"zai/glm-4.6\" --slice \"50:100\" [--tag glm46]" >&2
@@ -153,7 +179,21 @@ py tg_post_apply_security_scan.py \
   --outdir "$RUN/security_reports"
 
 # 5) Governance recompute
-py analyze_mini_swe_results.py \
+# Agentic trajectory risk analysis (optional but recommended).
+ARISK_FLAG=""
+if [[ -d "$RUN/trajs" ]] || ls "$RUN"/*.traj.json >/dev/null 2>&1; then
+  echo "[STEP] trajectory risk analysis -> agentic_risk.jsonl"
+  if [[ -n "$POLICY_PATH" ]]; then
+    py tg_traj_risk_analyzer.py --msa-dir "$RUN" --output "$RUN/agentic_risk.jsonl" --policy "$POLICY_PATH" |& tee "$RUN/agentic_risk.log" || true
+  else
+    py tg_traj_risk_analyzer.py --msa-dir "$RUN" --output "$RUN/agentic_risk.jsonl" |& tee "$RUN/agentic_risk.log" || true
+  fi
+fi
+if [[ -f "$RUN/agentic_risk.jsonl" ]]; then
+  ARISK_FLAG="--agentic-risk-jsonl $RUN/agentic_risk.jsonl"
+fi
+
+py analyze_mini_swe_results.py $ARISK_FLAG \
   --msa-dir "$RUN" \
   --model-id "$MODEL_ID" \
   --instance-results "$RUN/eval/instance_results.jsonl" \
@@ -168,7 +208,11 @@ if [[ -f "$CODE_DIR/tg_run_audit.py" ]]; then
   py tg_run_audit.py --msa-dir "$RUN" |& tee "$RUN/run_audit.txt" || true
 fi
 
-python "$ROOT/audit_proof_bundle.py" "$RUN" --model-id "$MODEL_ID" --tag "$TAG" |& tee "$RUN/proof_manifest.log"
+if [[ -n "$POLICY_PATH" ]]; then
+  python "$ROOT/audit_proof_bundle.py" "$RUN" --model-id "$MODEL_ID" --tag "$TAG" --policy "$POLICY_PATH" |& tee "$RUN/proof_manifest.log"
+else
+  python "$ROOT/audit_proof_bundle.py" "$RUN" --model-id "$MODEL_ID" --tag "$TAG" |& tee "$RUN/proof_manifest.log"
+fi
 
 tar -czf "$RUN/proof_bundle.tgz" \
   "$RUN/minisweagent.log" \

@@ -117,6 +117,7 @@ def main() -> int:
         d = json.loads(p.read_text(encoding="utf-8"))
         instance_id = d.get("instance_id") or p.stem.replace(".traj", "")
         patch, source = extract_patch_from_traj(d)
+        submission_valid = _looks_like_unified_diff(patch)
 
         rec = {
             "model_name_or_path": "extracted_from_trajectory",
@@ -124,8 +125,14 @@ def main() -> int:
             "model_patch": patch,
             "_patch_source": source,
             "_traj_path": str(p.relative_to(run_dir)),
+            "submission_valid": submission_valid,
         }
-        preds.append({k: rec[k] for k in ["model_name_or_path", "instance_id", "model_patch"]})
+        preds.append(
+            {
+                k: rec[k]
+                for k in ["model_name_or_path", "instance_id", "model_patch", "submission_valid"]
+            }
+        )
         preds_filled.append(rec)
 
         if not patch:
