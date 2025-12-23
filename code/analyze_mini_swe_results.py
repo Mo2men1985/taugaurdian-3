@@ -61,6 +61,13 @@ def classify_infra_failure_from_patch(patch_text: str) -> Optional[str]:
     return None
 
 
+def _submission_valid_from_patch(patch_text: str) -> bool:
+    if not patch_text:
+        return False
+    text = str(patch_text)
+    return "diff --git" in text or ("--- a/" in text and "+++ b/" in text)
+
+
 def iterate_added_lines(patch_text: str) -> Iterable[Tuple[Optional[str], str]]:
     """
     Yield (path, line) for each added line in a unified diff.
@@ -948,8 +955,10 @@ def build_eval_records(
         for rec in predictions:
             instance_id = str(rec.get("instance_id"))
             patch = rec.get("model_patch", "")
-            patch_bytes = len(patch.encode("utf-8"))
-            patch_sha256 = hashlib.sha256(patch.encode("utf-8")).hexdigest()
+            if "submission_valid" in rec:
+                submission_valid = bool(rec.get("submission_valid"))
+            else:
+                submission_valid = _submission_valid_from_patch(patch)
             status = statuses.get(instance_id, "Unknown")
             eval_result = eval_results.get(instance_id)
 
@@ -958,6 +967,57 @@ def build_eval_records(
             artifacts = discover_artifacts(msa_dir, instance_id)
 
             infra_failure_class = classify_infra_failure_from_patch(patch)
+            infra_timeout_before_patch = _is_infra_timeout_before_patch(patch)
+
+            if (
+                not submission_valid
+                and not infra_failure_class
+                and not (infra_timeout_before_patch and instance_eval is None)
+            ):
+                tau_step = int(rec.get("tau_step", 1))
+                empty_patch = ""
+                patch_bytes = 0
+                patch_sha256 = hashlib.sha256(empty_patch.encode("utf-8")).hexdigest()
+                row = {
+                    "model": model_id,
+                    "provider": rec.get("provider", "unknown"),
+                    "task": instance_id,
+                    "type": "external_swe_agent",
+                    "source": "mini-swe-agent",
+                    "status": status,
+                    "resolved": None,
+                    "resolved_status": None,
+                    "eval_status": "invalid_patch",
+                    "tests_passed": 0,
+                    "tests_failed": 0,
+                    "total_tests": 0,
+                    "test_pass_rate": 0.0,
+                    "cri": 0.0,
+                    "sad_flag": False,
+                    "security_scan_failed": False,
+                    "security_scan_error": None,
+                    "security_scan_scope": "skipped_invalid_patch",
+                    "security_report_found": False,
+                    "tau": tau_step,
+                    "tau_max": tau_max,
+                    "cri_threshold": cri_threshold,
+                    "final_decision": "ABSTAIN",
+                    "decision_reason": "empty_or_invalid_patch",
+                    "iterations": tau_step,
+                    "patch": empty_patch,
+                    "patch_bytes": patch_bytes,
+                    "patch_sha256": patch_sha256,
+                    "submission_valid": False,
+                    "security_violations": [],
+                    "infra_timeout_before_patch": False,
+                    "artifacts": artifacts,
+                }
+                out_f.write(json.dumps(row) + "\n")
+                total += 1
+                continue
+
+            patch_bytes = len(patch.encode("utf-8"))
+            patch_sha256 = hashlib.sha256(patch.encode("utf-8")).hexdigest()
             if infra_failure_class:
                 tau_step = int(rec.get("tau_step", 1))
                 row: Dict[str, Any] = {
@@ -991,6 +1051,7 @@ def build_eval_records(
                     "patch": patch,
                     "patch_bytes": patch_bytes,
                     "patch_sha256": patch_sha256,
+                    "submission_valid": submission_valid,
                     "security_violations": [],
                     "infra_timeout_before_patch": True,
                     "artifacts": artifacts,
@@ -1000,7 +1061,7 @@ def build_eval_records(
                 total += 1
                 continue
 
-            if _is_infra_timeout_before_patch(patch) and instance_eval is None:
+            if infra_timeout_before_patch and instance_eval is None:
                 tau_step = int(rec.get("tau_step", 1))
                 row: Dict[str, Any] = {
                     "model": model_id,
@@ -1033,6 +1094,7 @@ def build_eval_records(
                     "patch": patch,
                     "patch_bytes": patch_bytes,
                     "patch_sha256": patch_sha256,
+                    "submission_valid": submission_valid,
                     "security_violations": [],
                     "infra_timeout_before_patch": True,
                     "artifacts": artifacts,
@@ -1154,6 +1216,7 @@ def build_eval_records(
                 "patch": patch,
                 "patch_bytes": patch_bytes,
                 "patch_sha256": patch_sha256,
+                "submission_valid": submission_valid,
                 "security_violations": security_violations,
                 "infra_timeout_before_patch": False,
                 "artifacts": artifacts,

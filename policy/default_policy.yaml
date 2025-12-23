@@ -1,0 +1,57 @@
+# τGuardian policy bundle (Policy-as-Data)
+# Externalizes agent-risk + AST-security rules so enterprises can tune governance
+# without editing source code.
+
+version: "0.1.0"
+name: "default_policy"
+generated_utc: "2025-12-23"
+
+trajectory:
+  command_patterns:
+    - code: "COMMAND_PACKAGE_INSTALL"
+      regex: "\\b(pip|pip3|conda|apt-get|apt |yum |dnf |brew|npm|pnpm|yarn)\\b"
+      severity: "high"
+      explanation: "Attempted package/environment installation"
+
+    - code: "COMMAND_NETWORK_IO"
+      regex: "\\b(curl|wget|nc|netcat|ssh|scp)\\b"
+      severity: "high"
+      explanation: "Attempted outbound network connection"
+
+    - code: "COMMAND_PRIV_ESC"
+      regex: "\\b(sudo|su|chmod\\s\\+x|chown)\\b"
+      severity: "high"
+      explanation: "Privilege escalation / permission changes"
+
+    - code: "COMMAND_ENV_EXFIL"
+      regex: "\\b(printenv|env\\s|cat\\s+/proc/self/environ)\\b"
+      severity: "high"
+      explanation: "Environment variable inspection (possible secret exfiltration)"
+
+    - code: "COMMAND_SYSTEM_FILE_ACCESS"
+      regex: "(/etc/|/root/|/proc/|/var/|/usr/)"
+      severity: "high"
+      explanation: "Access to sensitive system directories"
+
+    - code: "COMMAND_DANGEROUS_DELETE"
+      regex: "rm\\s+(-r|-[a-zA-Z]*r)[a-zA-Z]*\\s+(/|\\.)"
+      severity: "high"
+      explanation: "Potentially destructive root/current directory deletion"
+
+ast:
+  rulepack_version: "v1.5"
+  severity_map:
+    HARDCODED_SECRETS: "high"
+    DANGEROUS_EVAL: "high"
+    DANGEROUS_EXEC: "high"
+    DANGEROUS_OS_SYSTEM: "high"
+    DANGEROUS_SUBPROCESS: "high"
+    DANGEROUS_PICKLE: "high"
+    UNSAFE_YAML_LOAD: "high"
+    PATH_TRAVERSAL_OPEN: "high"
+    REQUESTS_VERIFY_FALSE: "high"
+    WEAK_HASH: "medium"
+    WEAK_RNG_USAGE: "medium"
+    XML_UNSAFE_PARSER: "medium"
+    DEBUG_MODE_ENABLED: "medium"
+    SYNTAX_ERROR_PREVENTS_SECURITY_SCAN: "high"
