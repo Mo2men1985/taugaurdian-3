@@ -97,6 +97,7 @@ require_script tg_swebench_cli.py
 require_script tg_post_apply_security_scan.py
 require_script analyze_mini_swe_results.py
 require_script tg_ci_gate.py
+require_script tg_verify_proof_bundle.py
 
 # Load provider keys if present (no-op if missing)
 if [[ -f "$HOME/.config/mini-swe-agent/.env" ]]; then
@@ -181,6 +182,7 @@ py tg_post_apply_security_scan.py \
 # 5) Governance recompute
 # Agentic trajectory risk analysis (optional but recommended).
 ARISK_FLAG=""
+POLICY_FLAG=""
 if [[ -d "$RUN/trajs" ]] || ls "$RUN"/*.traj.json >/dev/null 2>&1; then
   echo "[STEP] trajectory risk analysis -> agentic_risk.jsonl"
   if [[ -n "$POLICY_PATH" ]]; then
@@ -192,8 +194,11 @@ fi
 if [[ -f "$RUN/agentic_risk.jsonl" ]]; then
   ARISK_FLAG="--agentic-risk-jsonl $RUN/agentic_risk.jsonl"
 fi
+if [[ -n "$POLICY_PATH" ]]; then
+  POLICY_FLAG="--policy $POLICY_PATH"
+fi
 
-py analyze_mini_swe_results.py $ARISK_FLAG \
+py analyze_mini_swe_results.py $ARISK_FLAG $POLICY_FLAG \
   --msa-dir "$RUN" \
   --model-id "$MODEL_ID" \
   --instance-results "$RUN/eval/instance_results.jsonl" \
@@ -214,6 +219,8 @@ else
   python "$ROOT/audit_proof_bundle.py" "$RUN" --model-id "$MODEL_ID" --tag "$TAG" |& tee "$RUN/proof_manifest.log"
 fi
 
+py tg_verify_proof_bundle.py --run-dir "$RUN" |& tee "$RUN/proof_verify.log"
+
 tar -czf "$RUN/proof_bundle.tgz" \
   "$RUN/minisweagent.log" \
   "$RUN/preds_filled.json" \
@@ -224,6 +231,7 @@ tar -czf "$RUN/proof_bundle.tgz" \
   "$RUN/run_audit.txt" \
   "$RUN/proof_manifest.json" \
   "$RUN/proof_manifest.log" \
+  "$RUN/proof_verify.log" \
   "$RUN/governance.log" 2>/dev/null || true
 
 echo "[DONE] proof bundle: $RUN/proof_bundle.tgz"

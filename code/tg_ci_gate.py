@@ -14,6 +14,8 @@ import json
 import sys
 from pathlib import Path
 
+from tg_verify_proof_bundle import verify_manifest
+
 
 def main() -> None:
     parser = argparse.ArgumentParser(
@@ -23,6 +25,16 @@ def main() -> None:
         "--input",
         required=True,
         help="Path to the governed JSONL file produced by analyze_mini_swe_results.py.",
+    )
+    parser.add_argument(
+        "--verify-proof-run",
+        default=None,
+        help="Optional run directory to verify proof_manifest.json integrity.",
+    )
+    parser.add_argument(
+        "--verify-proof-manifest",
+        default=None,
+        help="Optional explicit proof_manifest.json path to verify.",
     )
     args = parser.parse_args()
 
@@ -66,6 +78,21 @@ def main() -> None:
     if veto > 0:
         print(f"[CI] FAIL: {veto} VETO decision(s) present. Failing the job.")
         sys.exit(1)
+
+    if args.verify_proof_run:
+        run_dir = Path(args.verify_proof_run).resolve()
+        manifest_path = (
+            Path(args.verify_proof_manifest).resolve()
+            if args.verify_proof_manifest
+            else None
+        )
+        ok, errors = verify_manifest(run_dir, manifest_path)
+        if not ok:
+            print("[CI] FAIL: proof bundle verification failed.")
+            for err in errors:
+                print(f"  - {err}")
+            sys.exit(1)
+        print("[CI] proof bundle verification passed.")
 
     print("[CI] PASS: no VETO decisions. Build is green.")
     sys.exit(0)
